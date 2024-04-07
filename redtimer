@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# -*- coding: UTF-8 -*-
+## Simple interface to `at` to allow the usage as a pomodoro timer.
+## usage:
+##    redtimer help           Show this message
+##    redtimer work [min]     Start work session
+##    redtimer pause [min]    Take a break
+##    redtimer end            Stop redtimer
+##    redtimer log [search]   Show redtimer log, eventually filtered by search term
+##    redtimer                Show running redtimer
+
+# Time duration setting hierarchy:
+# 1. user input if provided
+# 2. environment variables if set
+# 3. script defaults
+
+# environment variables
+_work_session_time=${REDTIMER_WORK_SESSION_TIME:-35}
+_pause_session_time=${REDTIMER_PAUSE_SESSION_TIME:-10}
+_log_session_path=${REDTIMER_LOG_SESSION_PATH:-~/MyBox/Work/sideproject/redtimer-session-log.txt}
+
+# deps
+at_ok=$(which at | wc -l)
+if [ $at_ok != 1 ]; then
+    echo "at is missing"
+    exit 1
+fi
+
+# user input
+if [[ ! -z $2 ]]; then
+    _work_session_time=$2
+    _pause_session_time=$2
+fi
+
+# functions
+function help() {
+    cat -v $0 | grep -e "^##"
+}
+
+function work() {
+    [ -f  /tmp/redtimer-work-job ] && echo "+ a timer is already running" && exit 1
+    [ -f  /tmp/redtimer-pause-job ] && echo "+ a timer is already running" && exit 1
+    session_start_time=`LC_ALL=en_US.utf8 date +"%a %b %d %H:%M:%S %Y"`
+    msg="notify-send -i time -c urgent 'work session ended' && echo work completed, $session_start_time + $_work_session_time min >> $_log_session_path && rm -f /tmp/redtimer-work-job"
+    job_id=`echo "$msg" | at now + $_work_session_time min 2>&1 >/dev/null | grep job | cut -d" " -f2`
+    echo "$job_id" > /tmp/redtimer-work-job
+    status
+}
+
+function pause() {
+    [ -f  /tmp/redtimer-work-job ] && echo "+ a timer is already running" && exit 1
+    [ -f  /tmp/redtimer-pause-job ] && echo "+ a timer is already running" && exit 1
+    msg="notify-send -i time -c urgent 'pause ended' && rm -f /tmp/redtimer-pause-job"
+    job_id=`echo "$msg" | at now + $_pause_session_time min 2>&1 >/dev/null | grep job | cut -d" " -f2`
+    echo "$job_id" > /tmp/redtimer-pause-job
+    status
+}
+
+function end() {
+    msg=""
+    [ -f /tmp/redtimer-work-job ]  && msg+="work"  && job_id=`cat -v /tmp/redtimer-work-job`  && rm /tmp/redtimer-work-job
+    [ -f /tmp/redtimer-pause-job ] && msg+="pause" && job_id=`cat -v /tmp/redtimer-pause-job` && rm /tmp/redtimer-pause-job
+    [ ! -z $job_id ] && atrm $job_id && echo "+ $msg session stopped" && return
+    echo "+ no redtimer found"
+}
+
+function status() {
+    msg=""
+    [ -f /tmp/redtimer-work-job ] && msg+="work"
+    [ -f /tmp/redtimer-pause-job ] && msg+="pause"
+
+    job_id=$(get_job_id)
+    [ ! -z $job_id ] && end_time=`get_end_time $job_id`
+    [ "$end_time" = "" ] && echo "+ no redtimer running"
+    [ ! "$end_time" = "" ] && echo "+ $msg session will end at $end_time"
+}
+
+function get_job_id() {
+    [ -f /tmp/redtimer-work-job ] && job_id=`cat -v /tmp/redtimer-work-job`
+    [ -f /tmp/redtimer-pause-job ] && job_id=`cat -v /tmp/redtimer-pause-job`
+    echo "$job_id"
+}
+
+function get_end_time() {
+    job_id=$1
+    end_time=`atq | grep $job_id | cut -d" " -f2,3,4,5`
+    echo "$end_time"
+}
+
+function log() {
+    search="$@"
+    [ ! -f  "$_log_session_path" ] && touch "$_log_session_path"
+    if [ "$search" = "" ]; then
+        echo "showing full redtimer log history"
+        cat -v "$_log_session_path"
+        n=`cat -v "$_log_session_path" | wc -l`
+        echo "$n session(s) completed"
+    else
+        echo "showing \"$search\" in redtimer history"
+        cat -v "$_log_session_path" | grep "$search"
+        n=`cat -v "$_log_session_path" | grep "$search" | wc -l`
+        echo "$n session(s) completed"
+    fi
+}
+
+# main
+set -e
+cmd=$1
+[ "$cmd" = "" ] && status && echo "- run 'redtimer help' for usage -" && exit 0
+case $cmd in
+    work|wor|wo|w) work;;
+    pause|paus|pau|pa|p) pause;;
+    end|en|e) end;;
+    log|lo|l) log ${@:2};;
+    help|hel|he|h) help;;
+    status|statu|stat|sta|st|s) status;;
+    *) echo "- run 'redtimer help' for usage -";;
+esac
